@@ -8,16 +8,15 @@ export default withAuth({
 
 export const config = {
   matcher: [
-    /*
-     * Match all request paths except for the ones starting with:
-     * - api/auth (auth endpoints)
-     * - login
-     * - register
-     * - _next/static (static files)
-     * - _next/image (image optimization files)
-     * - favicon.ico (favicon file)
-     * - public files (images, fonts, etc)
-     */
-    "/((?!api/auth|login|register|_next/static|_next/image|images|favicon.ico).*)",
+    "/dashboard/:path*",
+    "/settings/:path*",
+    "/analytics/:path*",
+    "/study-plan/:path*",
+    "/speaking/:path*",
+    "/writing/:path*",
+    "/listening/:path*",
+    "/reading/:path*",
+    "/mock-test/:path*",
+    "/leaderboard/:path*",
   ],
 };

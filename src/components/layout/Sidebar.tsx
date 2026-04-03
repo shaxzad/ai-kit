@@ -23,7 +23,7 @@ const navSections = [
   {
     label: "Overview",
     items: [
-      { href: "/", label: "Dashboard", icon: LayoutDashboard },
+      { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
       { href: "/analytics", label: "Analytics", icon: BarChart3 },
       { href: "/study-plan", label: "Study Plan", icon: Map },
     ],
@@ -75,8 +75,8 @@ export default function Sidebar() {
             <ul className="space-y-0.5">
               {section.items.map((item) => {
                 const isActive =
-                  item.href === "/"
-                    ? pathname === "/"
+                  item.href === "/dashboard"
+                    ? pathname === "/dashboard"
                     : pathname.startsWith(item.href);
                 return (
                   <li key={item.href}>

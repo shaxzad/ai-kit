@@ -3,11 +3,12 @@
 import { usePathname } from "next/navigation";
 import { useState, useRef, useEffect } from "react";
 import { useSession, signOut } from "next-auth/react";
+import { useTheme } from "next-themes";
 import Link from "next/link";
 import { Bell, Settings, LogOut, Moon, Sun, Monitor, User } from "lucide-react";
 
 const pageTitles: Record<string, { title: string; subtitle: string }> = {
-  "/": { title: "Dashboard", subtitle: "Your PTE learning overview" },
+  "/dashboard": { title: "Dashboard", subtitle: "Your PTE learning overview" },
   "/analytics": { title: "Analytics", subtitle: "Track your progress over time" },
   "/study-plan": { title: "Study Plan", subtitle: "Your personalized daily tasks" },
   "/speaking/read-aloud": { title: "Read Aloud", subtitle: "Speaking Module" },
@@ -31,7 +32,14 @@ export default function TopBar() {
   const pathname = usePathname();
   const page = pageTitles[pathname] ?? { title: "PTE Master", subtitle: "" };
   const { data: session } = useSession();
+  const { theme, setTheme } = useTheme();
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
+  const [mounted, setMounted] = useState(false);
+
+  // Avoid hydration mismatch by waiting for mount
+  useEffect(() => {
+    setMounted(true);
+  }, []);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -95,11 +103,13 @@ export default function TopBar() {
                     <span className="text-white/80 text-sm font-medium">Theme</span>
                   </div>
                   {/* Theme Switcher Toggle */}
-                  <div className="flex items-center gap-1 bg-black/40 rounded-full p-0.5 border border-white/5">
-                    <div className="p-1 rounded-full text-white/30 hover:text-white transition-colors cursor-pointer"><Monitor size={12} /></div>
-                    <div className="p-1 rounded-full text-white/30 hover:text-white transition-colors cursor-pointer"><Sun size={12} /></div>
-                    <div className="p-1 rounded-full bg-primary-500 text-white shadow-sm cursor-pointer"><Moon size={12} /></div>
-                  </div>
+                  {mounted && (
+                    <div className="flex items-center gap-1 bg-black/40 rounded-full p-0.5 border border-white/5">
+                      <div onClick={() => setTheme('system')} className={`p-1.5 rounded-full cursor-pointer transition-colors ${theme === 'system' ? 'bg-primary-500 text-white shadow-sm' : 'text-white/30 hover:text-white'}`}><Monitor size={12} /></div>
+                      <div onClick={() => setTheme('light')} className={`p-1.5 rounded-full cursor-pointer transition-colors ${theme === 'light' ? 'bg-primary-500 text-white shadow-sm' : 'text-white/30 hover:text-white'}`}><Sun size={12} /></div>
+                      <div onClick={() => setTheme('dark')} className={`p-1.5 rounded-full cursor-pointer transition-colors ${theme === 'dark' ? 'bg-primary-500 text-white shadow-sm' : 'text-white/30 hover:text-white'}`}><Moon size={12} /></div>
+                    </div>
+                  )}
                 </div>
 
                 <Link href="/settings" onClick={() => setIsDropdownOpen(false)}>
