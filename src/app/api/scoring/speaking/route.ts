@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import prisma from "@/lib/prisma";
+import { updateUserProgress } from "@/lib/progress-service";
 
 export async function POST(req: Request) {
   try {
@@ -19,11 +20,6 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "No audio provided" }, { status: 400 });
     }
 
-    // In a real implementation:
-    // 1. Send Blob to OpenAI Whisper to get transcript
-    // 2. Measure speaking duration for Fluency score
-    // 3. Compare transcript to targetText for Content/Pronunciation score
-    
     // Server-side Mock logic calculation mimicking Whisper API duration delay
     await new Promise(resolve => setTimeout(resolve, 1500));
 
@@ -42,12 +38,11 @@ export async function POST(req: Request) {
     // Save to DB
     const user = await prisma.user.findUnique({ where: { email: session.user.email } });
     if (user) {
-      await prisma.userProgress.update({
-        where: { userId: user.id },
-        data: {
-          speakingScore: result.overall,
-          xp: { increment: 15 }
-        }
+      await updateUserProgress(user.id, {
+        module: 'speaking',
+        score: result.overall,
+        xpEarned: 15,
+        practiceMinutes: 1
       });
     }
 

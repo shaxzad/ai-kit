@@ -3,6 +3,7 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import prisma from "@/lib/prisma";
 import OpenAI from "openai";
+import { updateUserProgress } from "@/lib/progress-service";
 
 const openai = process.env.OPENAI_API_KEY ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY }) : null;
 
@@ -51,12 +52,11 @@ export async function POST(req: Request) {
     // Save to DB
     const user = await prisma.user.findUnique({ where: { email: session.user.email } });
     if (user) {
-      await prisma.userProgress.update({
-        where: { userId: user.id },
-        data: {
-          writingScore: result.overall,
-          xp: { increment: 20 }
-        }
+      await updateUserProgress(user.id, {
+        module: 'writing',
+        score: result.overall,
+        xpEarned: 20,
+        practiceMinutes: 5
       });
     }
 

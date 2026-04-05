@@ -49,6 +49,7 @@ model User {
   // App-specific relations
   subscription  Subscription?
   progress      UserProgress?
+  history       ProgressHistory[]
 }
 
 model VerificationToken {
@@ -89,5 +90,22 @@ model UserProgress {
   readingScore   Float    @default(0.0)
   listeningScore Float    @default(0.0)
 
+  practiceMinutes Int     @default(0)
+
   updatedAt      DateTime @updatedAt
+}
+
+model ProgressHistory {
+  id             String   @id @default(cuid())
+  userId         String
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  date           DateTime @default(now())
+  
+  speakingScore  Float    @default(0.0)
+  writingScore   Float    @default(0.0)
+  listeningScore Float    @default(0.0)
+  readingScore   Float    @default(0.0)
+  overallBand    Float    @default(0.0)
+
+  @@index([userId, date])
 }

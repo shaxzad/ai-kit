@@ -2,15 +2,36 @@
 
 import { useState, useEffect } from "react";
 import Link from "next/link";
-import { userProgress, studyPlan, progressHistory, achievements } from "@/lib/mock-data";
+import { studyPlan, achievements } from "@/lib/mock-data";
 import { getScoreColor, getScoreLabel } from "@/lib/utils";
 import {
   Mic, Headphones, PenLine, BookOpen, ClipboardList,
-  TrendingUp, Zap, Flame, Trophy, ArrowRight, CheckCircle2, Circle
+  TrendingUp, Zap, Flame, Trophy, ArrowRight, CheckCircle2, Circle,
+  Loader2
 } from "lucide-react";
 import {
   LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid
 } from "recharts";
+
+interface ProgressData {
+  overallBand: number;
+  speakingScore: number;
+  writingScore: number;
+  listeningScore: number;
+  readingScore: number;
+  xp: number;
+  streak: number;
+  testsCompleted: number;
+  practiceMinutes: number;
+  history: Array<{
+    date: string;
+    speakingScore: number;
+    listeningScore: number;
+    writingScore: number;
+    readingScore: number;
+    overallBand: number;
+  }>;
+}
 
 // ── Score Ring Component ──────────────────────────────────────
 function ScoreRing({ score, color, size = 100 }: { score: number; color: string; size?: number }) {
@@ -83,27 +104,29 @@ function ModuleCard({
   );
 }
 
-const moduleCards = [
-  { icon: Mic, label: "Speaking", key: "speaking" as const, href: "/speaking/read-aloud", color: "#818cf8", gradient: "bg-gradient-to-br from-indigo-500 to-purple-600" },
-  { icon: Headphones, label: "Listening", key: "listening" as const, href: "/listening/summarize", color: "#06b6d4", gradient: "bg-gradient-to-br from-cyan-500 to-blue-600" },
-  { icon: PenLine, label: "Writing", key: "writing" as const, href: "/writing/essay", color: "#10b981", gradient: "bg-gradient-to-br from-emerald-500 to-teal-600" },
-  { icon: BookOpen, label: "Reading", key: "reading" as const, href: "/reading/comprehension", color: "#f59e0b", gradient: "bg-gradient-to-br from-amber-500 to-orange-600" },
+const moduleCardsConfig = [
+  { icon: Mic, label: "Speaking", key: "speakingScore", href: "/speaking/read-aloud", color: "#818cf8", gradient: "bg-gradient-to-br from-indigo-500 to-purple-600" },
+  { icon: Headphones, label: "Listening", key: "listeningScore", href: "/listening/summarize", color: "#06b6d4", gradient: "bg-gradient-to-br from-cyan-500 to-blue-600" },
+  { icon: PenLine, label: "Writing", key: "writingScore", href: "/writing/essay", color: "#10b981", gradient: "bg-gradient-to-br from-emerald-500 to-teal-600" },
+  { icon: BookOpen, label: "Reading", key: "readingScore", href: "/reading/comprehension", color: "#f59e0b", gradient: "bg-gradient-to-br from-amber-500 to-orange-600" },
 ];
 
-const chartData = progressHistory.slice(-14).map((d) => ({
-  date: d.date.slice(5),
-  Speaking: d.speaking,
-  Listening: d.listening,
-  Writing: d.writing,
-  Reading: d.reading,
-}));
+interface TooltipProps {
+  active?: boolean;
+  payload?: Array<{
+    dataKey: string;
+    value: number;
+    color: string;
+  }>;
+  label?: string;
+}
 
-const CustomTooltip = ({ active, payload, label }: any) => {
+const CustomTooltip = ({ active, payload, label }: TooltipProps) => {
   if (!active || !payload?.length) return null;
   return (
     <div className="glass-strong rounded-xl px-4 py-3 text-xs">
       <p className="text-white/60 mb-2">{label}</p>
-      {payload.map((p: any) => (
+      {payload.map((p) => (
         <p key={p.dataKey} style={{ color: p.color }} className="font-semibold">
           {p.dataKey}: {p.value}
         </p>
@@ -113,8 +136,58 @@ const CustomTooltip = ({ active, payload, label }: any) => {
 };
 
 export default function DashboardPage() {
-  const overall = userProgress.overallBand;
+  const [data, setData] = useState<Partial<ProgressData> & { error?: string } | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    async function fetchProgress() {
+      try {
+        const res = await fetch("/api/progress");
+        const json = await res.json();
+        setData(json);
+      } catch (err) {
+        console.error("Dashboard Load Error:", err);
+      } finally {
+        setLoading(false);
+      }
+    }
+    fetchProgress();
+  }, []);
+
+  if (loading) {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-[60vh] gap-4">
+        <Loader2 className="w-8 h-8 text-primary-500 animate-spin" />
+        <p className="text-white/40 text-sm animate-pulse">Analyzing your performance...</p>
+      </div>
+    );
+  }
+
+  const progress: ProgressData = {
+    overallBand: 0,
+    speakingScore: 0,
+    writingScore: 0,
+    listeningScore: 0,
+    readingScore: 0,
+    xp: 0,
+    streak: 0,
+    testsCompleted: 0,
+    practiceMinutes: 0,
+    history: [],
+    ...(data && !data.error ? (data as Partial<ProgressData>) : {})
+  };
+
+  const level = Math.floor(progress.xp / 500) + 1;
+  const overall = progress.overallBand;
   const color = getScoreColor(overall);
+
+  const chartData = progress.history?.map((d) => ({
+    date: new Date(d.date).toLocaleDateString([], { month: 'short', day: 'numeric' }),
+    Speaking: d.speakingScore,
+    Listening: d.listeningScore,
+    Writing: d.writingScore,
+    Reading: d.readingScore,
+  })) || [];
 
   return (
     <div className="space-y-6">
@@ -131,18 +204,18 @@ export default function DashboardPage() {
             </div>
           </div>
           <p className="font-semibold mt-3 text-lg" style={{ color }}>{getScoreLabel(overall)}</p>
-          <p className="text-white/35 text-xs mt-1">Based on last 14 days</p>
+          <p className="text-white/35 text-xs mt-1">Real-time performance tracker</p>
         </div>
 
         {/* Stats */}
         <div className="lg:col-span-2 grid grid-cols-2 sm:grid-cols-3 gap-4">
           {[
-            { icon: Flame, label: "Streak", value: `${userProgress.streak}d`, color: "text-amber-400", bg: "bg-amber-500/10" },
-            { icon: Zap, label: "XP Points", value: userProgress.xp.toLocaleString(), color: "text-primary-400", bg: "bg-primary-500/10" },
-            { icon: Trophy, label: "Level", value: userProgress.level, color: "text-violet-400", bg: "bg-violet-500/10" },
-            { icon: ClipboardList, label: "Tests Done", value: userProgress.testsCompleted, color: "text-cyan-400", bg: "bg-cyan-500/10" },
-            { icon: TrendingUp, label: "Practice Min", value: `${userProgress.practiceMinutes}m`, color: "text-emerald-400", bg: "bg-emerald-500/10" },
-            { icon: BookOpen, label: "Rank", value: "#8", color: "text-rose-400", bg: "bg-rose-500/10" },
+            { icon: Flame, label: "Streak", value: `${progress.streak}d`, color: "text-amber-400", bg: "bg-amber-500/10" },
+            { icon: Zap, label: "XP Points", value: progress.xp.toLocaleString(), color: "text-primary-400", bg: "bg-primary-500/10" },
+            { icon: Trophy, label: "Level", value: level, color: "text-violet-400", bg: "bg-violet-500/10" },
+            { icon: ClipboardList, label: "Tests Done", value: progress.testsCompleted, color: "text-cyan-400", bg: "bg-cyan-500/10" },
+            { icon: TrendingUp, label: "Practice Min", value: `${progress.practiceMinutes}m`, color: "text-emerald-400", bg: "bg-emerald-500/10" },
+            { icon: BookOpen, label: "Global Rank", value: "#-", color: "text-rose-400", bg: "bg-rose-500/10" },
           ].map(({ icon: Icon, label, value, color, bg }) => (
             <div key={label} className="glass rounded-2xl p-4 flex flex-col">
               <div className={`w-9 h-9 ${bg} rounded-xl flex items-center justify-center mb-3`}>
@@ -159,12 +232,12 @@ export default function DashboardPage() {
       <section>
         <h2 className="text-white/70 text-sm font-semibold uppercase tracking-wider mb-3">Module Scores</h2>
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-          {moduleCards.map((m) => (
+          {moduleCardsConfig.map((m) => (
             <ModuleCard
               key={m.key}
               icon={m.icon}
               label={m.label}
-              score={userProgress.modules[m.key]}
+              score={progress[m.key as keyof ProgressData] as number}
               href={m.href}
               color={m.color}
               gradient={m.gradient}
@@ -178,23 +251,31 @@ export default function DashboardPage() {
         {/* Chart */}
         <div className="lg:col-span-2 glass rounded-2xl p-5">
           <div className="flex items-center justify-between mb-5">
-            <h2 className="text-white font-semibold text-[15px]">Score Progress (14 days)</h2>
+            <h2 className="text-white font-semibold text-[15px]">Score Progress (Last 14 Results)</h2>
             <Link href="/analytics" className="text-primary-400 text-xs hover:text-primary-300 flex items-center gap-1 transition-colors">
               Full Analytics <ArrowRight size={12} />
             </Link>
           </div>
-          <ResponsiveContainer width="100%" height={200}>
-            <LineChart data={chartData}>
-              <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
-              <XAxis dataKey="date" tick={{ fill: "rgba(255,255,255,0.3)", fontSize: 10 }} axisLine={false} tickLine={false} />
-              <YAxis domain={[40, 90]} tick={{ fill: "rgba(255,255,255,0.3)", fontSize: 10 }} axisLine={false} tickLine={false} />
-              <Tooltip content={<CustomTooltip />} />
-              <Line type="monotone" dataKey="Speaking" stroke="#818cf8" strokeWidth={2} dot={false} />
-              <Line type="monotone" dataKey="Listening" stroke="#06b6d4" strokeWidth={2} dot={false} />
-              <Line type="monotone" dataKey="Writing" stroke="#10b981" strokeWidth={2} dot={false} />
-              <Line type="monotone" dataKey="Reading" stroke="#f59e0b" strokeWidth={2} dot={false} />
-            </LineChart>
-          </ResponsiveContainer>
+          <div className="h-[200px] w-full">
+            {chartData.length > 0 ? (
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={chartData}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
+                  <XAxis dataKey="date" tick={{ fill: "rgba(255,255,255,0.3)", fontSize: 10 }} axisLine={false} tickLine={false} />
+                  <YAxis domain={[0, 90]} tick={{ fill: "rgba(255,255,255,0.3)", fontSize: 10 }} axisLine={false} tickLine={false} />
+                  <Tooltip content={<CustomTooltip />} />
+                  <Line type="monotone" dataKey="Speaking" stroke="#818cf8" strokeWidth={2} dot={false} animateDuration={1500} />
+                  <Line type="monotone" dataKey="Listening" stroke="#06b6d4" strokeWidth={2} dot={false} animateDuration={1500} />
+                  <Line type="monotone" dataKey="Writing" stroke="#10b981" strokeWidth={2} dot={false} animateDuration={1500} />
+                  <Line type="monotone" dataKey="Reading" stroke="#f59e0b" strokeWidth={2} dot={false} animateDuration={1500} />
+                </LineChart>
+              </ResponsiveContainer>
+            ) : (
+              <div className="h-full flex items-center justify-center border border-dashed border-white/5 rounded-xl bg-white/[0.02]">
+                <p className="text-white/20 text-sm">Start practicing to see your progress chart</p>
+              </div>
+            )}
+          </div>
         </div>
 
         {/* Today's tasks */}
