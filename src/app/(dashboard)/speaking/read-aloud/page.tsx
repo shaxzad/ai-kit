@@ -8,18 +8,65 @@ import { Mic, MicOff, Volume2, ChevronRight, RotateCcw, CheckCircle } from "luci
 
 type Stage = "prepare" | "recording" | "analyzing" | "feedback";
 
+interface SpeakingResult {
+  pronunciation: number;
+  fluency: number;
+  content: number;
+  overall: number;
+  feedback: string[];
+  wordFeedback: Array<{
+    word: string;
+    status: "correct" | "near" | "incorrect";
+    accuracy: number;
+    phonemes?: Array<{
+      phoneme: string;
+      accuracy: number;
+    }>;
+  }>;
+}
+
 export default function ReadAloudPage() {
   const [questionIdx, setQuestionIdx] = useState(0);
   const [stage, setStage] = useState<Stage>("prepare");
   const [prepTime, setPrepTime] = useState(30);
   const [recTime, setRecTime] = useState(0);
-  const [score, setScore] = useState<ReturnType<typeof mockSpeakingScore> | null>(null);
+  const [score, setScore] = useState<SpeakingResult | null>(null);
   const [bars, setBars] = useState<number[]>(Array(32).fill(4));
   const [isAnimating, setIsAnimating] = useState(false);
 
   const q = readAloudQuestions[questionIdx];
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const animRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
+
+  // Start real recording
+  const startRecording = useCallback(async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      
+      // Select supported MIME type (Safari on Mac might need audio/mp4)
+      const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus") 
+        ? "audio/webm;codecs=opus" 
+        : MediaRecorder.isTypeSupported("audio/webm")
+          ? "audio/webm"
+          : "audio/mp4";
+          
+      const recorder = new MediaRecorder(stream, { mimeType });
+      mediaRecorderRef.current = recorder;
+      audioChunksRef.current = [];
+
+      recorder.ondataavailable = (e) => {
+        if (e.data.size > 0) audioChunksRef.current.push(e.data);
+      };
+
+      recorder.start();
+      setStage("recording");
+    } catch (err) {
+      console.error("Microphone Access Error:", err);
+      alert("Please allow microphone access to practice speaking.");
+    }
+  }, []);
 
   // Countdown for preparation
   useEffect(() => {
@@ -29,7 +76,7 @@ export default function ReadAloudPage() {
         setPrepTime((p) => {
           if (p <= 1) {
             clearInterval(intervalRef.current!);
-            setStage("recording");
+            startRecording();
             return 0;
           }
           return p - 1;
@@ -37,7 +84,7 @@ export default function ReadAloudPage() {
       }, 1000);
     }
     return () => { if (intervalRef.current) clearInterval(intervalRef.current); };
-  }, [stage, questionIdx]);
+  }, [stage, questionIdx, startRecording]);
 
   // Recording timer + waveform animation
   useEffect(() => {
@@ -62,34 +109,59 @@ export default function ReadAloudPage() {
   }, [stage]);
 
   const stopRecording = useCallback(async () => {
-    clearInterval(intervalRef.current!);
-    setStage("analyzing");
+    if (!mediaRecorderRef.current) return;
     
-    try {
-      const formData = new FormData();
-      formData.append("audio", new Blob(["mock_audio_data"], { type: "audio/webm" }));
-      formData.append("targetText", readAloudQuestions[questionIdx].passage);
-
-      const res = await fetch("/api/scoring/speaking", {
-        method: "POST",
-        body: formData,
+    // Provide instant feedback
+    setStage("analyzing");
+    if (intervalRef.current) clearInterval(intervalRef.current!);
+    
+    mediaRecorderRef.current.onstop = async () => {
+      const audioBlob = new Blob(audioChunksRef.current, { 
+        type: mediaRecorderRef.current?.mimeType || "audio/webm" 
       });
+      
+      try {
+        const formData = new FormData();
+        formData.append("audio", audioBlob);
+        formData.append("targetText", readAloudQuestions[questionIdx].passage);
 
-      if (res.ok) {
-        const data = await res.json();
-        setScore({
-          pronunciation: data.pronunciation,
-          fluency: data.fluency,
-          content: data.content,
-          overall: data.overall,
-          feedback: [data.feedback, "Your tone is confident."],
-          wordFeedback: [] // Optional realistic matching mapping goes here
+        const res = await fetch("/api/scoring/speaking", {
+          method: "POST",
+          body: formData,
         });
+
+        if (res.ok) {
+          const data = await res.json();
+          setScore({
+            pronunciation: data.pronunciation,
+            fluency: data.fluency,
+            content: data.content,
+            overall: data.overall,
+            feedback: [data.feedback, "Check phoneme accuracy for details."],
+            wordFeedback: data.phonemeDetails?.map((w: any) => ({
+              word: w.word,
+              status: w.accuracy > 80 ? "correct" : w.accuracy > 40 ? "near" : "incorrect",
+              accuracy: Math.round(w.accuracy),
+              phonemes: w.phonemes?.map((p: any) => ({
+                phoneme: p.phoneme,
+                accuracy: Math.round(p.accuracy)
+              }))
+            }))
+          });
+        }
+      } catch (e) {
+        console.error("Scoring Error:", e);
+      } finally {
+        setStage("feedback");
       }
-    } catch (e) {
-      console.error(e);
+    };
+
+    if (mediaRecorderRef.current.state !== "inactive") {
+      mediaRecorderRef.current.stop();
     }
-    setStage("feedback");
+    
+    // Release mic tracks
+    mediaRecorderRef.current.stream.getTracks().forEach(track => track.stop());
   }, [questionIdx]);
 
   const next = () => {
@@ -134,9 +206,18 @@ export default function ReadAloudPage() {
 
       {/* Stage UI */}
       {stage === "prepare" && (
-        <div className="glass rounded-2xl p-8 flex flex-col items-center text-center">
+        <div 
+          onClick={() => {
+            if (intervalRef.current) clearInterval(intervalRef.current);
+            setStage("recording");
+          }}
+          className="glass rounded-2xl p-8 flex flex-col items-center text-center cursor-pointer hover:bg-white/10 transition-colors group"
+        >
           <p className="text-white/50 text-sm mb-3">Preparation Time</p>
           <div className="relative w-28 h-28 mb-4">
+            {/* Pulsing effect on hover to hint clickability */}
+            <div className="absolute inset-0 rounded-full bg-primary-500/0 group-hover:bg-primary-500/10 animate-pulse transition-colors" />
+            
             <svg className="rotate-[-90deg]" width="112" height="112">
               <circle cx="56" cy="56" r="48" strokeWidth="6" stroke="rgba(255,255,255,0.08)" fill="none" />
               <circle
@@ -153,6 +234,7 @@ export default function ReadAloudPage() {
             </div>
           </div>
           <p className="text-white/60 text-sm">Read the passage silently. Recording will begin automatically.</p>
+          <p className="text-primary-400 text-[10px] mt-4 opacity-0 group-hover:opacity-100 transition-opacity">Click to start recording now</p>
         </div>
       )}
 
@@ -223,20 +305,45 @@ export default function ReadAloudPage() {
               <div>
                 <p className="text-white/50 text-xs uppercase tracking-wider mb-2">Word-Level Feedback</p>
                 <div className="flex flex-wrap gap-2">
-                  {score.wordFeedback.map(({ word, status }) => (
-                    <span
-                      key={word}
-                      className={`px-3 py-1 rounded-lg text-sm font-medium ${
-                        status === "correct" ? "bg-emerald-500/15 text-emerald-300" :
-                        status === "incorrect" ? "bg-rose-500/15 text-rose-300 line-through" :
-                        "bg-amber-500/15 text-amber-300 italic"
-                      }`}
-                    >
-                      {word}
-                      <span className="text-[10px] ml-1 opacity-60">
-                        {status === "correct" ? "✓" : status === "incorrect" ? "✗" : "?"}
+                  {score.wordFeedback.map(({ word, status, phonemes }, i) => (
+                    <div key={i} className="group relative">
+                      <span
+                        className={`px-3 py-1 rounded-lg text-sm font-medium transition-all ${
+                          status === "correct" ? "bg-emerald-500/15 text-emerald-300" :
+                          status === "incorrect" ? "bg-rose-500/15 text-rose-300 line-through" :
+                          "bg-amber-500/15 text-amber-300 italic"
+                        }`}
+                      >
+                        {word}
+                        <span className="text-[10px] ml-1 opacity-60">
+                          {status === "correct" ? "✓" : status === "incorrect" ? "✗" : "?"}
+                        </span>
                       </span>
-                    </span>
+
+                      {/* Phoneme Tooltip */}
+                      {phonemes && phonemes.length > 0 && (
+                        <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 hidden group-hover:block z-50">
+                          <div className="glass-strong rounded-lg p-2 whitespace-nowrap shadow-2xl border border-white/10 animate-in fade-in zoom-in duration-200">
+                            <div className="flex gap-2">
+                              {phonemes.map((p, j) => (
+                                <div key={j} className="text-center min-w-[20px]">
+                                  <p className="text-[10px] font-bold text-white/90">{p.phoneme}</p>
+                                  <div className="h-1 w-full bg-white/10 rounded-full mt-1 overflow-hidden">
+                                    <div 
+                                      className="h-full rounded-full" 
+                                      style={{ 
+                                        width: `${p.accuracy}%`, 
+                                        backgroundColor: getScoreColor(p.accuracy) 
+                                      }} 
+                                    />
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </div>
                   ))}
                 </div>
               </div>

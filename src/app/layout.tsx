@@ -24,7 +24,7 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en" suppressHydrationWarning>
-      <body className="bg-surface-950 text-foreground antialiased selection:bg-primary-500/30">
+      <body suppressHydrationWarning className="bg-surface-950 text-foreground antialiased selection:bg-primary-500/30">
         <ThemeProvider attribute="class" defaultTheme="system" enableSystem disableTransitionOnChange>
           <AuthProvider>
             {children}
