@@ -4,6 +4,7 @@ import { authOptions } from "@/lib/auth";
 import prisma from "@/lib/prisma";
 import { updateUserProgress } from "@/lib/progress-service";
 import { Groq } from "groq-sdk";
+import { callLocalLLM } from "@/lib/local-ai";
 import * as sdk from "microsoft-cognitiveservices-speech-sdk";
 
 const groq = process.env.GROQ_API_KEY ? new Groq({ apiKey: process.env.GROQ_API_KEY }) : null;
@@ -80,10 +81,31 @@ export async function POST(req: Request) {
 
     const buffer = Buffer.from(await audio.arrayBuffer());
 
-    // 1. Transcription via Groq Whisper (if API key available)
+    // 1. Transcription (Local Whisper or Groq)
     let transcript = "";
     let whisperWords: any[] = [];
-    if (groq) {
+
+    if (process.env.LOCAL_WHISPER_ENABLED === "true") {
+      try {
+        const formData = new FormData();
+        formData.append("file", audio, "audio.wav");
+        formData.append("model", process.env.WHISPER_MODEL || "base");
+
+        const whisperResponse = await fetch(`${process.env.LOCAL_WHISPER_URL}/audio/transcriptions`, {
+          method: "POST",
+          body: formData,
+        });
+
+        if (whisperResponse.ok) {
+          const data = await whisperResponse.json();
+          transcript = data.text;
+        }
+      } catch (err) {
+        console.error("Local Whisper Error:", err);
+      }
+    }
+
+    if (!transcript && groq) {
       const transcription = await groq.audio.transcriptions.create({
         file: audio as any, 
         model: "whisper-large-v3",
@@ -111,18 +133,31 @@ export async function POST(req: Request) {
       overall: 70
     };
 
-    if (groq && transcript) {
-      const completion = await groq.chat.completions.create({
-        model: "llama-3.3-70b-versatile",
-        messages: [
-          { role: "system", content: "You are a PTE Speaking grader. Compare the transcript to the target text. Evaluate content relevance and grammar. Return JSON: { content: number, grammarFeedback: string, overallFeedback: string }" },
-          { role: "user", content: `Target: ${targetText}\nTranscript: ${transcript}` }
-        ],
-        response_format: { type: "json_object" }
-      });
-      const evaluation = JSON.parse(completion.choices[0].message.content || "{}");
-      scores.content = evaluation.content || 75;
-      finalFeedback = evaluation.overallFeedback || evaluation.grammarFeedback || finalFeedback;
+    if (transcript) {
+      if (process.env.LOCAL_LLM_ENABLED === "true") {
+        const evaluationResponse = await callLocalLLM(
+          `Target: ${targetText}\nTranscript: ${transcript}`,
+          "You are a PTE Speaking grader. Compare the transcript to the target text. Evaluate content relevance and grammar. Return JSON: { \"content\": number, \"grammarFeedback\": string, \"overallFeedback\": string }"
+        );
+        
+        if (evaluationResponse.content) {
+          const evaluation = JSON.parse(evaluationResponse.content);
+          scores.content = evaluation.content || 75;
+          finalFeedback = evaluation.overallFeedback || evaluation.grammarFeedback || finalFeedback;
+        }
+      } else if (groq) {
+        const completion = await groq.chat.completions.create({
+          model: "llama-3.3-70b-versatile",
+          messages: [
+            { role: "system", content: "You are a PTE Speaking grader. Compare the transcript to the target text. Evaluate content relevance and grammar. Return JSON: { \"content\": number, \"grammarFeedback\": string, \"overallFeedback\": string }" },
+            { role: "user", content: `Target: ${targetText}\nTranscript: ${transcript}` }
+          ],
+          response_format: { type: "json_object" }
+        });
+        const evaluation = JSON.parse(completion.choices[0].message.content || "{}");
+        scores.content = evaluation.content || 75;
+        finalFeedback = evaluation.overallFeedback || evaluation.grammarFeedback || finalFeedback;
+      }
       scores.overall = Math.round((scores.pronunciation + scores.fluency + scores.content) / 3);
     }
 

@@ -4,6 +4,7 @@ import { authOptions } from "@/lib/auth";
 import prisma from "@/lib/prisma";
 import OpenAI from "openai";
 import { updateUserProgress } from "@/lib/progress-service";
+import { callLocalLLM } from "@/lib/local-ai";
 
 const openai = process.env.OPENAI_API_KEY ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY }) : null;
 
@@ -22,31 +23,44 @@ export async function POST(req: Request) {
 
     let result;
 
-    if (openai) {
-      // Real OpenAI Integration
-      const completion = await openai.chat.completions.create({
-        model: "gpt-4o-mini",
-        messages: [
-          { role: "system", content: "You are an expert PTE writing evaluator. Grade the user's text out of 90 on Grammar, Structure, and Vocabulary. Return JSON with keys: grammar, structure, vocabulary, overall, feedback." },
-          { role: "user", content: `Prompt: ${prompt}\n\nEssay: ${text}` }
-        ],
-        response_format: { type: "json_object" }
-      });
-      result = JSON.parse(completion.choices[0].message.content || "{}");
-    } else {
-      // Intelligent Server-side Mock Fallback based on text length
-      const wordCount = text.trim().split(/\s+/).length;
-      const baseScore = Math.min(90, Math.max(40, 40 + (wordCount / 250) * 50));
+    if (process.env.LOCAL_LLM_ENABLED === "true") {
+      const evaluationResponse = await callLocalLLM(
+        `Prompt: ${prompt}\n\nEssay: ${text}`,
+        "You are an expert PTE writing evaluator. Grade the user's text out of 90 on Grammar, Structure, and Vocabulary. Return JSON with keys: \"grammar\", \"structure\", \"vocabulary\", \"overall\", \"feedback\"."
+      );
       
-      result = {
-        grammar: Math.round(baseScore * 0.95),
-        structure: Math.round(baseScore * 0.9),
-        vocabulary: Math.round(baseScore * 0.85),
-        overall: Math.round(baseScore),
-        feedback: wordCount < 200 
-          ? "Your text is too short. Try to write at least 200 words for essays to demonstrate complex structures."
-          : "Good attempt! Pay attention to advanced vocabulary and complex sentence structures to hit the top bands."
-      };
+      if (evaluationResponse.content) {
+        result = JSON.parse(evaluationResponse.content);
+      }
+    }
+
+    if (!result) {
+      if (openai) {
+        // Real OpenAI Integration
+        const completion = await openai.chat.completions.create({
+          model: "gpt-4o-mini",
+          messages: [
+            { role: "system", content: "You are an expert PTE writing evaluator. Grade the user's text out of 90 on Grammar, Structure, and Vocabulary. Return JSON with keys: grammar, structure, vocabulary, overall, feedback." },
+            { role: "user", content: `Prompt: ${prompt}\n\nEssay: ${text}` }
+          ],
+          response_format: { type: "json_object" }
+        });
+        result = JSON.parse(completion.choices[0].message.content || "{}");
+      } else {
+        // Intelligent Server-side Mock Fallback based on text length
+        const wordCount = text.trim().split(/\s+/).length;
+        const baseScore = Math.min(90, Math.max(40, 40 + (wordCount / 250) * 50));
+        
+        result = {
+          grammar: Math.round(baseScore * 0.95),
+          structure: Math.round(baseScore * 0.9),
+          vocabulary: Math.round(baseScore * 0.85),
+          overall: Math.round(baseScore),
+          feedback: wordCount < 200 
+            ? "Your text is too short. Try to write at least 200 words for essays to demonstrate complex structures."
+            : "Good attempt! Pay attention to advanced vocabulary and complex sentence structures to hit the top bands."
+        };
+      }
     }
 
     // Save to DB

@@ -33,19 +33,42 @@ export default function ReadAloudPage() {
   const [score, setScore] = useState<SpeakingResult | null>(null);
   const [bars, setBars] = useState<number[]>(Array(32).fill(4));
   const [isAnimating, setIsAnimating] = useState(false);
+  const [micAllowed, setMicAllowed] = useState(false);
+  const [mounted, setMounted] = useState(false);
+  const [liveTranscript, setLiveTranscript] = useState("");
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   const q = readAloudQuestions[questionIdx];
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const animRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
+  const socketRef = useRef<WebSocket | null>(null);
+
+  // Request Mic Permission early
+  const requestMicPermission = useCallback(async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      // We immediately stop the test stream to release the mic icon in browser, 
+      // but the permission remains granted for subsequent calls.
+      stream.getTracks().forEach(track => track.stop());
+      setMicAllowed(true);
+      return true;
+    } catch (err) {
+      console.error("Microphone Access Error:", err);
+      setMicAllowed(false);
+      return false;
+    }
+  }, []);
 
   // Start real recording
   const startRecording = useCallback(async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       
-      // Select supported MIME type (Safari on Mac might need audio/mp4)
       const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus") 
         ? "audio/webm;codecs=opus" 
         : MediaRecorder.isTypeSupported("audio/webm")
@@ -55,16 +78,55 @@ export default function ReadAloudPage() {
       const recorder = new MediaRecorder(stream, { mimeType });
       mediaRecorderRef.current = recorder;
       audioChunksRef.current = [];
+      setLiveTranscript(""); // Reset live transcript
 
-      recorder.ondataavailable = (e) => {
-        if (e.data.size > 0) audioChunksRef.current.push(e.data);
+      // 1. Setup WebSocket for live transcription
+      const isLocalEnabled = process.env.NEXT_PUBLIC_LOCAL_WHISPER_ENABLED === "true";
+      const localUrl = process.env.NEXT_PUBLIC_LOCAL_WHISPER_URL;
+
+      if (isLocalEnabled && localUrl) {
+        const socketUrl = localUrl.replace("http", "ws") + "/audio/stream";
+        console.log(`[WS] Connecting to: ${socketUrl}`);
+        const socket = new WebSocket(socketUrl);
+        socketRef.current = socket;
+
+        socket.onopen = () => console.log(">>> [WS] Live transcription socket connected.");
+        socket.onmessage = (event) => {
+          try {
+            const data = JSON.parse(event.data);
+            if (data.text) {
+              console.log("[WS] Received text chunk:", data.text);
+              setLiveTranscript(data.text);
+            }
+          } catch (e) {
+            console.error("[WS] Message parse error:", e);
+          }
+        };
+        socket.onerror = (e) => console.error(">>> [WS] Connection Error. Make sure python server is running on port 8000.", e);
+        socket.onclose = () => console.log("<<< [WS] Socket closed.");
+      } else {
+        console.warn("[WS] Streaming disabled. LOCAL_WHISPER_ENABLED is false or URL is missing.");
+      }
+
+      recorder.ondataavailable = async (e) => {
+        if (e.data.size > 0) {
+          audioChunksRef.current.push(e.data);
+          
+          // Send to live socket if open
+          if (socketRef.current?.readyState === WebSocket.OPEN) {
+            socketRef.current.send(e.data);
+          }
+        }
       };
 
-      recorder.start();
+      // Start recording with 1.5s timeslice for live feedback
+      recorder.start(1500);
       setStage("recording");
+      setMicAllowed(true);
     } catch (err) {
-      console.error("Microphone Access Error:", err);
-      alert("Please allow microphone access to practice speaking.");
+      console.error("Recording Start Error:", err);
+      setMicAllowed(false);
+      alert("Microphone access is required to record. Please check your browser settings.");
     }
   }, []);
 
@@ -72,6 +134,8 @@ export default function ReadAloudPage() {
   useEffect(() => {
     if (stage === "prepare") {
       setPrepTime(30);
+      requestMicPermission(); // Proactive request
+
       intervalRef.current = setInterval(() => {
         setPrepTime((p) => {
           if (p <= 1) {
@@ -114,6 +178,14 @@ export default function ReadAloudPage() {
     // Provide instant feedback
     setStage("analyzing");
     if (intervalRef.current) clearInterval(intervalRef.current!);
+
+    // Close and cleanup live socket
+    if (socketRef.current) {
+      if (socketRef.current.readyState === WebSocket.OPEN) {
+        socketRef.current.close();
+      }
+      socketRef.current = null;
+    }
     
     mediaRecorderRef.current.onstop = async () => {
       const audioBlob = new Blob(audioChunksRef.current, { 
@@ -174,7 +246,10 @@ export default function ReadAloudPage() {
   const reset = () => {
     setStage("prepare");
     setScore(null);
+    setLiveTranscript("");
   };
+
+  if (!mounted) return null;
 
   return (
     <div className="max-w-3xl mx-auto space-y-5">
@@ -209,7 +284,7 @@ export default function ReadAloudPage() {
         <div 
           onClick={() => {
             if (intervalRef.current) clearInterval(intervalRef.current);
-            setStage("recording");
+            startRecording();
           }}
           className="glass rounded-2xl p-8 flex flex-col items-center text-center cursor-pointer hover:bg-white/10 transition-colors group"
         >
@@ -239,8 +314,9 @@ export default function ReadAloudPage() {
       )}
 
       {stage === "recording" && (
-        <div className="glass rounded-2xl p-8 flex flex-col items-center text-center">
-          <div className="flex items-center gap-2 mb-5">
+        <>
+          <div className="glass rounded-2xl p-8 flex flex-col items-center text-center">
+            <div className="flex items-center gap-2 mb-5">
             <span className="w-2.5 h-2.5 rounded-full bg-rose-500 animate-pulse" />
             <span className="text-rose-400 font-semibold text-sm">Recording</span>
             <span className="text-white/40 text-xs ml-2">{formatTime(recTime)}</span>
@@ -255,13 +331,29 @@ export default function ReadAloudPage() {
               />
             ))}
           </div>
-          <button
-            onClick={stopRecording}
-            className="flex items-center gap-2 px-6 py-3 rounded-xl bg-rose-500 hover:bg-rose-400 text-white font-semibold transition-all shadow-lg"
-          >
-            <MicOff size={17} /> Stop Recording
-          </button>
-        </div>
+            <button
+              onClick={stopRecording}
+              className="flex items-center gap-2 px-6 py-3 rounded-xl bg-rose-500 hover:bg-rose-400 text-white font-semibold transition-all shadow-lg"
+            >
+              <MicOff size={17} /> Stop Recording
+            </button>
+          </div>
+
+          {/* Live Transcript Card */}
+          <div className="glass rounded-2xl p-6 border-t border-white/5 bg-white/5 animate-in fade-in slide-in-from-bottom-4 duration-500">
+            <div className="flex items-center gap-2 mb-3">
+              <div className="flex gap-1">
+                <span className="w-1 h-1 rounded-full bg-primary-400 animate-bounce [animation-delay:-0.3s]" />
+                <span className="w-1 h-1 rounded-full bg-primary-400 animate-bounce [animation-delay:-0.15s]" />
+                <span className="w-1 h-1 rounded-full bg-primary-400 animate-bounce" />
+              </div>
+              <span className="text-[10px] uppercase tracking-widest font-bold text-white/40">Live Transcription</span>
+            </div>
+            <p className="text-white/80 text-sm leading-relaxed italic min-h-[1.5rem]">
+              {liveTranscript || "Listening..."}
+            </p>
+          </div>
+        </>
       )}
 
       {stage === "analyzing" && (
@@ -377,9 +469,17 @@ export default function ReadAloudPage() {
 
       {/* Mic hint */}
       {stage === "prepare" && (
-        <div className="flex items-center gap-2 text-white/30 text-xs">
-          <Mic size={13} />
-          <span>Allow microphone access when prompted. Recording starts automatically.</span>
+        <div className="flex items-center justify-between w-full px-2">
+          <div className="flex items-center gap-2 text-white/30 text-xs text-balance">
+            <Mic size={13} className={micAllowed ? "text-emerald-500" : "text-white/30"} />
+            <span>{micAllowed ? "Microphone ready." : "Allow microphone access when prompted."} Recording starts automatically.</span>
+          </div>
+          {micAllowed && (
+            <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/20">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+              <span className="text-[10px] font-bold text-emerald-400 uppercase tracking-tighter">Mic Ready</span>
+            </div>
+          )}
         </div>
       )}
     </div>
